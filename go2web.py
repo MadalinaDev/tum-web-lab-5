@@ -131,18 +131,41 @@ def parse_response(raw_response):
     return status_code, headers, body
 
 
-def http_get(url):
-    """Perform a simple HTTP GET and return the body as a string."""
-    scheme, host, port, path = parse_url(url)
-    raw = send_request(scheme, host, port, path)
-    status, headers, body = parse_response(raw)
+def http_get(url, max_redirects=10):
+    """Perform an HTTP GET with automatic redirect following."""
+    visited = set()
 
-    content_type = headers.get("content-type", "")
-    charset = "utf-8"
-    if "charset=" in content_type:
-        charset = content_type.split("charset=")[-1].split(";")[0].strip()
+    for _ in range(max_redirects):
+        scheme, host, port, path = parse_url(url)
 
-    return body.decode(charset, errors="replace")
+        if url in visited:
+            print("Error: Redirect loop detected.")
+            return None
+        visited.add(url)
+
+        raw = send_request(scheme, host, port, path)
+        status, headers, body = parse_response(raw)
+
+        # Follow redirects
+        if status in (301, 302, 303, 307, 308) and "location" in headers:
+            redirect_url = headers["location"]
+            if redirect_url.startswith("/"):
+                redirect_url = f"{scheme}://{host}{redirect_url}"
+            elif not redirect_url.startswith("http"):
+                redirect_url = f"{scheme}://{host}/{redirect_url}"
+            print(f"[Redirect {status} -> {redirect_url}]")
+            url = redirect_url
+            continue
+
+        content_type = headers.get("content-type", "")
+        charset = "utf-8"
+        if "charset=" in content_type:
+            charset = content_type.split("charset=")[-1].split(";")[0].strip()
+
+        return body.decode(charset, errors="replace")
+
+    print("Error: Too many redirects.")
+    return None
 
 # Content rendering
 
