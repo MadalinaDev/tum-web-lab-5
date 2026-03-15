@@ -229,7 +229,7 @@ def search(term):
 
 
 def print_search_results(results):
-    """Display search results."""
+    """Display search results and optionally let the user open one."""
     if not results:
         print("No results found.")
         return
@@ -237,6 +237,30 @@ def print_search_results(results):
     for i, r in enumerate(results, 1):
         print(f"\n{i}. {r['title']}")
         print(f"   {r['url']}")
+
+    print("\n" + "-" * 50)
+    print("Enter a result number to open it, or press Enter / 'q' to quit:")
+
+    while True:
+        try:
+            choice = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            break
+
+        if choice.lower() in ("q", ""):
+            break
+
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(results):
+                target_url = results[idx]["url"]
+                print(f"\nFetching: {target_url}\n")
+                body = http_get(target_url)
+                print(format_response(body))
+            else:
+                print("Invalid number. Try again or 'q' to quit.")
+        except ValueError:
+            print("Enter a number or 'q'.")
 
 # CLI
 
