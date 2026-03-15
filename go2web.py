@@ -44,7 +44,8 @@ def build_request(method, host, path):
     headers = {
         "Host": host,
         "User-Agent": "go2web/1.0",
-        "Accept": "*/*",
+        "Accept": "text/html, application/json, text/plain;q=0.9, */*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.5",
         "Accept-Encoding": "identity",
         "Connection": "close",
     }
@@ -146,7 +147,7 @@ def _cache_path(url):
 
 
 def cache_get(url):
-    """Return cached response string or None."""
+    """Return cached (body, content_type) tuple or None."""
     filepath = _cache_path(url)
     if not os.path.exists(filepath):
         return None
@@ -154,25 +155,25 @@ def cache_get(url):
         with open(filepath, "r", encoding="utf-8") as f:
             data = json.load(f)
         if time.time() - data.get("timestamp", 0) < CACHE_TTL:
-            return data.get("body")
+            return (data.get("body"), data.get("content_type", ""))
     except (json.JSONDecodeError, OSError):
         pass
     return None
 
 
-def cache_set(url, body):
-    """Persist a response body string to disk."""
+def cache_set(url, body, content_type):
+    """Persist a response body and content_type to disk."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     filepath = _cache_path(url)
     try:
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump({"timestamp": time.time(), "body": body}, f)
+            json.dump({"timestamp": time.time(), "body": body, "content_type": content_type}, f)
     except OSError:
         pass
 
 
 def http_get(url, max_redirects=10):
-    """Perform an HTTP GET with automatic redirect following."""
+    """Perform an HTTP GET with redirect following. Returns (body, content_type) tuple."""
     visited = set()
 
     for _ in range(max_redirects):
@@ -180,7 +181,7 @@ def http_get(url, max_redirects=10):
 
         if url in visited:
             print("Error: Redirect loop detected.")
-            return None
+            return None, ""
         visited.add(url)
 
         # Cache lookup
@@ -209,11 +210,11 @@ def http_get(url, max_redirects=10):
             charset = content_type.split("charset=")[-1].split(";")[0].strip()
 
         body_text = body.decode(charset, errors="replace")
-        cache_set(url, body_text)
-        return body_text
+        cache_set(url, body_text, content_type)
+        return body_text, content_type
 
     print("Error: Too many redirects.")
-    return None
+    return None, ""
 
 # Content rendering
 
@@ -236,11 +237,21 @@ def html_to_text(html_content):
     return "\n".join(lines)
 
 
-def format_response(result):
-    """Return a human-readable string for a response body."""
-    if result is None:
+def format_response(body, content_type=""):
+    """Return a human-readable string based on the content type."""
+    if body is None:
         return "Error: No response received."
-    return html_to_text(result)
+
+    if "application/json" in content_type:
+        try:
+            parsed = json.loads(body)
+            return json.dumps(parsed, indent=2, ensure_ascii=False)
+        except json.JSONDecodeError:
+            return body
+    elif "text/html" in content_type:
+        return html_to_text(body)
+    else:
+        return html_to_text(body)
 
 # Search functionality (DuckDuckGo HTML)
 
@@ -252,8 +263,13 @@ def search(term):
     body = http_get(url)
     results = []
 
+    if body[0] is None:
+        print("Error: Could not perform search.")
+        return []
+
+    body_text = body[0]
     if HAS_BS4:
-        soup = BeautifulSoup(body, "html.parser")
+        soup = BeautifulSoup(body_text, "html.parser")
         for link in soup.select("a.result__a"):
             title = link.get_text(strip=True)
             href = link.get("href", "")
@@ -268,7 +284,7 @@ def search(term):
                 break
     else:
         pattern = r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>'
-        matches = re.findall(pattern, body, re.DOTALL)
+        matches = re.findall(pattern, body_text, re.DOTALL)
         for href, title in matches[:10]:
             clean_title = re.sub(r'<[^>]+>', '', title).strip()
             results.append({"title": clean_title, "url": href})
@@ -303,8 +319,8 @@ def print_search_results(results):
             if 0 <= idx < len(results):
                 target_url = results[idx]["url"]
                 print(f"\nFetching: {target_url}\n")
-                body = http_get(target_url)
-                print(format_response(body))
+                body, ct = http_get(target_url)
+                print(format_response(body, ct))
             else:
                 print("Invalid number. Try again or 'q' to quit.")
         except ValueError:
@@ -340,8 +356,8 @@ def main():
             print("Error: -u requires a URL argument.")
             sys.exit(1)
         url = args[idx + 1]
-        body = http_get(url)
-        print(format_response(body))
+        body, content_type = http_get(url)
+        print(format_response(body, content_type))
 
     elif "-s" in args:
         idx = args.index("-s")
