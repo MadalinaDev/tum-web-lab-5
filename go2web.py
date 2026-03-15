@@ -5,6 +5,10 @@ import sys
 import socket
 import ssl
 import re
+import json
+import os
+import hashlib
+import time
 from urllib.parse import urlparse, quote_plus, parse_qs
 
 try:
@@ -12,6 +16,10 @@ try:
     HAS_BS4 = True
 except ImportError:
     HAS_BS4 = False
+
+# Constants
+CACHE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".go2web_cache")
+CACHE_TTL = 300  # seconds (5 minutes)
 
 # URL helpers
 
@@ -130,6 +138,38 @@ def parse_response(raw_response):
 
     return status_code, headers, body
 
+# HTTP cache (file-based, JSON)
+
+def _cache_path(url):
+    key = hashlib.md5(url.encode()).hexdigest()
+    return os.path.join(CACHE_DIR, key + ".json")
+
+
+def cache_get(url):
+    """Return cached response string or None."""
+    filepath = _cache_path(url)
+    if not os.path.exists(filepath):
+        return None
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if time.time() - data.get("timestamp", 0) < CACHE_TTL:
+            return data.get("body")
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
+
+
+def cache_set(url, body):
+    """Persist a response body string to disk."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    filepath = _cache_path(url)
+    try:
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump({"timestamp": time.time(), "body": body}, f)
+    except OSError:
+        pass
+
 
 def http_get(url, max_redirects=10):
     """Perform an HTTP GET with automatic redirect following."""
@@ -142,6 +182,12 @@ def http_get(url, max_redirects=10):
             print("Error: Redirect loop detected.")
             return None
         visited.add(url)
+
+        # Cache lookup
+        cached = cache_get(url)
+        if cached is not None:
+            print(f"[Cache hit for {url}]")
+            return cached
 
         raw = send_request(scheme, host, port, path)
         status, headers, body = parse_response(raw)
@@ -162,7 +208,9 @@ def http_get(url, max_redirects=10):
         if "charset=" in content_type:
             charset = content_type.split("charset=")[-1].split(";")[0].strip()
 
-        return body.decode(charset, errors="replace")
+        body_text = body.decode(charset, errors="replace")
+        cache_set(url, body_text)
+        return body_text
 
     print("Error: Too many redirects.")
     return None
