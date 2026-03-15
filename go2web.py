@@ -5,7 +5,7 @@ import sys
 import socket
 import ssl
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus, parse_qs
 
 try:
     from bs4 import BeautifulSoup
@@ -171,6 +171,50 @@ def format_response(result):
         return "Error: No response received."
     return html_to_text(result)
 
+# Search functionality (DuckDuckGo HTML)
+
+def search(term):
+    """Query DuckDuckGo's HTML endpoint and return up to 10 results."""
+    query = quote_plus(term)
+    url = f"https://html.duckduckgo.com/html/?q={query}"
+
+    body = http_get(url)
+    results = []
+
+    if HAS_BS4:
+        soup = BeautifulSoup(body, "html.parser")
+        for link in soup.select("a.result__a"):
+            title = link.get_text(strip=True)
+            href = link.get("href", "")
+            # DuckDuckGo wraps real URLs inside an "uddg" query parameter
+            if "uddg=" in href:
+                qs = parse_qs(urlparse(href).query)
+                if "uddg" in qs:
+                    href = qs["uddg"][0]
+            if title and href:
+                results.append({"title": title, "url": href})
+            if len(results) >= 10:
+                break
+    else:
+        pattern = r'<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>'
+        matches = re.findall(pattern, body, re.DOTALL)
+        for href, title in matches[:10]:
+            clean_title = re.sub(r'<[^>]+>', '', title).strip()
+            results.append({"title": clean_title, "url": href})
+
+    return results
+
+
+def print_search_results(results):
+    """Display search results."""
+    if not results:
+        print("No results found.")
+        return
+
+    for i, r in enumerate(results, 1):
+        print(f"\n{i}. {r['title']}")
+        print(f"   {r['url']}")
+
 # CLI
 
 HELP_TEXT = """\
@@ -210,7 +254,8 @@ def main():
             print("Error: -s requires a search term.")
             sys.exit(1)
         term = " ".join(args[idx + 1:])
-        print(f"TODO: search for '{term}'")
+        results = search(term)
+        print_search_results(results)
 
     else:
         print("Error: Unknown option. Use -h for help.")
