@@ -4,7 +4,14 @@
 import sys
 import socket
 import ssl
+import re
 from urllib.parse import urlparse
+
+try:
+    from bs4 import BeautifulSoup
+    HAS_BS4 = True
+except ImportError:
+    HAS_BS4 = False
 
 # URL helpers
 
@@ -137,6 +144,33 @@ def http_get(url):
 
     return body.decode(charset, errors="replace")
 
+# Content rendering
+
+def html_to_text(html_content):
+    """Convert an HTML document to readable plain text."""
+    if HAS_BS4:
+        soup = BeautifulSoup(html_content, "html.parser")
+        for tag in soup(["script", "style", "noscript", "head"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n")
+    else:
+        import html as html_mod
+        text = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = html_mod.unescape(text)
+
+    lines = [line.strip() for line in text.splitlines()]
+    lines = [l for l in lines if l]
+    return "\n".join(lines)
+
+
+def format_response(result):
+    """Return a human-readable string for a response body."""
+    if result is None:
+        return "Error: No response received."
+    return html_to_text(result)
+
 # CLI
 
 HELP_TEXT = """\
@@ -168,7 +202,7 @@ def main():
             sys.exit(1)
         url = args[idx + 1]
         body = http_get(url)
-        print(body)
+        print(format_response(body))
 
     elif "-s" in args:
         idx = args.index("-s")
