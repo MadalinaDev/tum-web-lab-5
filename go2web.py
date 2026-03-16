@@ -219,17 +219,57 @@ def http_get(url, max_redirects=10):
 # Content rendering
 
 def html_to_text(html_content):
-    """Convert an HTML document to readable plain text."""
+    """Convert an HTML document to readable plain text, stripping boilerplate."""
     if HAS_BS4:
         soup = BeautifulSoup(html_content, "html.parser")
-        for tag in soup(["script", "style", "noscript", "head"]):
+
+        # 1. Remove tags whose content is never useful to the reader
+        for tag in soup(["script", "style", "noscript", "head", "svg", "img",
+                         "iframe", "object", "embed", "canvas", "map",
+                         "audio", "video", "source", "picture", "link", "meta"]):
             tag.decompose()
+
+        # 2. Remove semantic boilerplate regions (nav, footer, header, aside, forms, etc.)
+        for tag in soup.find_all(["nav", "footer", "header", "aside", "form"]):
+            tag.decompose()
+
+        # 3. Remove common boilerplate <div>/<section> by role / aria / id / class hints
+        boilerplate_patterns = re.compile(
+            r"nav|menu|sidebar|footer|header|cookie|consent|banner|advert|promo|"
+            r"popup|modal|overlay|newsletter|signup|sign-up|social|share|"
+            r"breadcrumb|pagination|widget|toolbar|search-box|comment",
+            re.IGNORECASE,
+        )
+
+        for tag in soup.find_all(["div", "section", "ul", "span", "aside"]):
+            if tag.parent is None:
+                continue
+            id_val = tag.get("id") or ""
+            class_val = " ".join(tag.get("class") or [])
+            role_val = tag.get("role") or ""
+            aria_val = tag.get("aria-label") or ""
+            attrs_text = f"{id_val} {class_val} {role_val} {aria_val}"
+            if boilerplate_patterns.search(attrs_text):
+                tag.decompose()
+
+        # 4. Extract text, preserving block-level structure
         text = soup.get_text(separator="\n")
     else:
         import html as html_mod
-        text = re.sub(r'<script[^>]*>.*?</script>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<style[^>]*>.*?</style>', '', html_content, flags=re.DOTALL | re.IGNORECASE)
-        text = re.sub(r'<[^>]+>', '', text)
+        # Strip non-content tags via regex when bs4 is not available
+        for pattern in [
+            r'<script[^>]*>.*?</script>',
+            r'<style[^>]*>.*?</style>',
+            r'<noscript[^>]*>.*?</noscript>',
+            r'<nav[^>]*>.*?</nav>',
+            r'<footer[^>]*>.*?</footer>',
+            r'<header[^>]*>.*?</header>',
+            r'<aside[^>]*>.*?</aside>',
+            r'<form[^>]*>.*?</form>',
+            r'<svg[^>]*>.*?</svg>',
+        ]:
+            html_content = re.sub(pattern, '', html_content, flags=re.DOTALL | re.IGNORECASE)
+        text = re.sub(r'<[^>]+>', '', html_content)
         text = html_mod.unescape(text)
 
     lines = [line.strip() for line in text.splitlines()]
